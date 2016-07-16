@@ -2,8 +2,13 @@ package logfmt
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
+	"reflect"
+	"strconv"
+	"strings"
+	"time"
 )
 
 // A Decoder reads and decodes logfmt records from an input stream.
@@ -219,4 +224,130 @@ type SyntaxError struct {
 
 func (e *SyntaxError) Error() string {
 	return fmt.Sprintf("logfmt syntax error at pos %d on line %d: %s", e.Pos, e.Line, e.Msg)
+}
+
+func Unmarshal(b []byte, s interface{}) error {
+	v := reflect.ValueOf(s)
+
+	if v.Kind() != reflect.Ptr {
+		return fmt.Errorf("Cannot unmarshal to non-pointer interface")
+	}
+	rv := reflect.Indirect(v)
+
+	d := NewDecoder(bytes.NewReader(b))
+
+	if !d.ScanRecord() {
+		return nil
+	}
+
+	for d.ScanKeyval() {
+		k := string(d.Key())
+
+		for i := 0; i < rv.NumField(); i++ {
+			fv := rv.Field(i)
+			ft := rv.Type().Field(i)
+			tags := strings.SplitN(ft.Tag.Get("logfmt"), ",", 2)
+
+			if len(tags) == 0 {
+				continue
+			}
+
+			var option string
+			if len(tags) == 2 {
+				option = tags[1]
+			}
+
+			if tags[0] == k {
+				err := setValue(fv, string(d.Value()), option)
+				if err != nil {
+					return fmt.Errorf(
+						"Error while parsing %s (%s): %s",
+						ft.Name,
+						k,
+						err,
+					)
+				}
+			}
+		}
+	}
+
+	if d.ScanRecord() {
+		return fmt.Errorf("Cannot unmarshal multiple records")
+	}
+
+	return nil
+}
+
+func setValue(v reflect.Value, s string, option string) error {
+	switch v.Kind() {
+	case reflect.Struct:
+		var t time.Time
+		if v.Type() == reflect.TypeOf(t) {
+			t, err := time.Parse(option, s)
+			if err != nil {
+				return err
+			}
+			v.Set(reflect.ValueOf(t))
+		} else {
+			return fmt.Errorf("Unsupported type %s", v.Kind().String())
+		}
+	case reflect.Bool:
+		switch s {
+		case "true", "1":
+			v.SetBool(true)
+		case "false", "0":
+			v.SetBool(false)
+		default:
+			return fmt.Errorf("Bool must be true/false or 1/0")
+		}
+	case reflect.Int:
+		i, err := strconv.ParseInt(s, 0, 0)
+		if err != nil {
+			return err
+		}
+		v.SetInt(i)
+	case reflect.Int64:
+		var d time.Duration
+		if v.Type() == reflect.TypeOf(d) {
+			d, err := time.ParseDuration(fmt.Sprintf("%s%s", s, option))
+			if err != nil {
+				return err
+			}
+			v.Set(reflect.ValueOf(d))
+		} else {
+			return fmt.Errorf("Unsupported type %s", v.Kind().String())
+		}
+	case reflect.Slice:
+		elems := strings.Split(s, ",")
+		slice := reflect.MakeSlice(v.Type(), len(elems), len(elems))
+		for i, elem := range elems {
+			var ev interface{}
+
+			switch v.Type().Elem().Kind() {
+			case reflect.String:
+				ev = elem
+			case reflect.Int:
+				pi, err := strconv.ParseInt(elem, 0, 0)
+				if err != nil {
+					return err
+				}
+				ev = int(pi)
+			default:
+				return fmt.Errorf(
+					"Unsupported slice type: %s",
+					v.Type().Elem().Kind().String(),
+				)
+
+			}
+
+			slice.Index(i).Set(reflect.ValueOf(ev))
+		}
+		v.Set(slice)
+	case reflect.String:
+		v.SetString(s)
+	default:
+		return fmt.Errorf("Unsupported type %s", v.Kind().String())
+	}
+
+	return nil
 }

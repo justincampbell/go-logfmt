@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"reflect"
 	"strings"
+	"time"
 )
 
 // MarshalKeyvals returns the logfmt encoding of keyvals, a variadic sequence
@@ -309,4 +311,90 @@ func safeMarshal(tm encoding.TextMarshaler) (b []byte, err error) {
 		}
 	}
 	return
+}
+
+func Encode(s interface{}) ([]byte, error) {
+	rv := reflect.ValueOf(s)
+
+	if rv.Kind() == reflect.Ptr {
+		return nil, fmt.Errorf("Cannot encode pointer")
+	}
+
+	w := &bytes.Buffer{}
+	e := NewEncoder(w)
+
+	for i := 0; i < rv.NumField(); i++ {
+		fv := rv.Field(i)
+		ft := rv.Type().Field(i)
+
+		key, opt := extractStructTag(ft)
+		if key == "" {
+			continue
+		}
+
+		s, err := generateValue(fv, opt)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"Error while generating %s (%s): %s",
+				ft.Name,
+				key,
+				err,
+			)
+		}
+
+		if s == "" || s == "0" {
+			continue
+		}
+
+		err = e.EncodeKeyval(key, s)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return w.Bytes(), nil
+}
+
+func generateValue(v reflect.Value, opt string) (string, error) {
+	switch v.Kind() {
+	case reflect.Int64:
+		var d time.Duration
+		if v.Type() == reflect.TypeOf(d) {
+			d = v.Interface().(time.Duration)
+			switch opt {
+			case "s":
+				return fmt.Sprintf("%v", round(d.Seconds())), nil
+			case "m":
+				return fmt.Sprintf("%v", round(d.Minutes())), nil
+			case "h":
+				return fmt.Sprintf("%v", round(d.Hours())), nil
+			default:
+				return d.String(), nil
+			}
+		}
+		fallthrough
+	case reflect.Slice:
+		var generated []string
+
+		for i := 0; i < v.Len(); i++ {
+			s, err := generateValue(v.Index(i), opt)
+			if err != nil {
+				return "", err
+			}
+			generated = append(generated, s)
+		}
+		return strings.Join(generated, ","), nil
+	case reflect.Struct:
+		var t time.Time
+		if v.Type() == reflect.TypeOf(t) {
+			return v.Interface().(time.Time).Format(opt), nil
+		}
+		fallthrough
+	default:
+		return fmt.Sprintf("%v", v), nil
+	}
+}
+
+func round(f float64) int {
+	return int(math.Floor(f + .5))
 }
