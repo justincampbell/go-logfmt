@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/justincampbell/go-logfmt"
+	"github.com/stretchr/testify/assert"
 )
 
 type Person struct {
@@ -28,7 +29,7 @@ var person = &Person{
 	FavoriteNumbers:         []int{1, 2},
 	CanHoldBreathFor:        45 * time.Second,
 	CanHoldBreathForSeconds: 45 * time.Second,
-	Empty: "",
+	Empty:                   "",
 }
 
 func Test_structtags_Encode(t *testing.T) {
@@ -38,7 +39,7 @@ func Test_structtags_Encode(t *testing.T) {
 	}
 	expected := `name="Jane Doe" age=32 is_alive=true birth_date="Friday, 15-Jul-16 21:04:45 MST" fav_colors="orange,sky blue" fav_numbers=1,2 hold_breath=45s hold_breath_seconds=45`
 	if string(b) != expected {
-		t.Fatalf("bad: %#s", b)
+		t.Fatalf("bad: %s", b)
 	}
 }
 
@@ -186,7 +187,5 @@ func Test_structtags_Unmarshal_time(t *testing.T) {
 		"Friday, 15-Jul-16 09:04:45 MST",
 	)
 
-	if p.BirthDate != expected {
-		t.Fatalf("bad: %#v", p.BirthDate)
-	}
+	assert.Equal(t, expected, p.BirthDate)
 }
